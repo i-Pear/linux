@@ -149,6 +149,11 @@ static __always_inline unsigned long *vcpu_pc(const struct kvm_vcpu *vcpu)
 	return (unsigned long *)&vcpu_gp_regs(vcpu)->pc;
 }
 
+static __always_inline unsigned long *vcpu_fp(const struct kvm_vcpu *vcpu)
+{
+	return (unsigned long *)&vcpu_gp_regs(vcpu)->regs[29];
+}
+
 static __always_inline unsigned long *vcpu_cpsr(const struct kvm_vcpu *vcpu)
 {
 	return (unsigned long *)&vcpu_gp_regs(vcpu)->pstate;

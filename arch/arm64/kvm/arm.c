@@ -566,9 +566,25 @@ bool kvm_arch_vcpu_in_kernel(struct kvm_vcpu *vcpu)
 }
 
 #ifdef CONFIG_GUEST_PERF_EVENTS
+bool kvm_arch_vcpu_is_64bit(struct kvm_vcpu *vcpu)
+{
+	return !vcpu_mode_is_32bit(vcpu);
+}
+
 unsigned long kvm_arch_vcpu_get_ip(struct kvm_vcpu *vcpu)
 {
 	return *vcpu_pc(vcpu);
+}
+
+unsigned long kvm_arch_vcpu_get_fp(struct kvm_vcpu *vcpu)
+{
+	return vcpu_fp(vcpu);
+}
+
+bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, void *addr, void *dest, unsigned int length)
+{
+	/* TODO: Find a way to read from guest */
+	return false;
 }
 #endif
 
