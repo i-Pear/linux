@@ -28,10 +28,13 @@
 
 #define PERF_GUEST_ACTIVE	0x01
 #define PERF_GUEST_USER	0x02
+#define PERF_GUEST_64BIT 0x04
 
 struct perf_guest_info_callbacks {
 	unsigned int			(*state)(void);
 	unsigned long			(*get_ip)(void);
+	unsigned long			(*get_frame_pointer)(void);
+	bool				(*read_virt)(void *addr, void *dest, unsigned int len);
 	unsigned int			(*handle_intel_pt_intr)(void);
 };
 
@@ -1495,6 +1498,8 @@ extern struct perf_guest_info_callbacks __rcu *perf_guest_cbs;
 
 DECLARE_STATIC_CALL(__perf_guest_state, *perf_guest_cbs->state);
 DECLARE_STATIC_CALL(__perf_guest_get_ip, *perf_guest_cbs->get_ip);
+DECLARE_STATIC_CALL(__perf_guest_get_frame_pointer, *perf_guest_cbs->get_frame_pointer);
+DECLARE_STATIC_CALL(__perf_guest_read_virt, *perf_guest_cbs->read_virt);
 DECLARE_STATIC_CALL(__perf_guest_handle_intel_pt_intr, *perf_guest_cbs->handle_intel_pt_intr);
 
 static inline unsigned int perf_guest_state(void)
@@ -1505,6 +1510,14 @@ static inline unsigned long perf_guest_get_ip(void)
 {
 	return static_call(__perf_guest_get_ip)();
 }
+static inline unsigned long perf_guest_get_frame_pointer(void)
+{
+	return static_call(__perf_guest_get_frame_pointer)();
+}
+static inline bool perf_guest_read_virt(void *addr, void *dest, unsigned int length)
+{
+	return static_call(__perf_guest_read_virt)(addr, dest, length);
+}
 static inline unsigned int perf_guest_handle_intel_pt_intr(void)
 {
 	return static_call(__perf_guest_handle_intel_pt_intr)();
@@ -1514,6 +1527,8 @@ extern void perf_unregister_guest_info_callbacks(struct perf_guest_info_callback
 #else
 static inline unsigned int perf_guest_state(void)		 { return 0; }
 static inline unsigned long perf_guest_get_ip(void)		 { return 0; }
+static inline unsigned long perf_guest_get_frame_pointer(void)	{ return 0; }
+static inline bool perf_guest_read_virt(void*, void*, unsigned int)	{ return 0; }
 static inline unsigned int perf_guest_handle_intel_pt_intr(void) { return 0; }
 #endif /* CONFIG_GUEST_PERF_EVENTS */
 
@@ -1530,9 +1545,10 @@ DECLARE_PER_CPU(struct perf_callchain_entry, perf_callchain_entry);
 
 extern void perf_callchain_user(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs);
 extern void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs);
+extern void perf_callchain_guest(struct perf_callchain_entry_ctx *entry);
 extern struct perf_callchain_entry *
 get_perf_callchain(struct pt_regs *regs, u32 init_nr, bool kernel, bool user,
-		   u32 max_stack, bool crosstask, bool add_mark);
+		   bool host, bool guest, u32 max_stack, bool crosstask, bool add_mark);
 extern int get_callchain_buffers(int max_stack);
 extern void put_callchain_buffers(void);
 extern struct perf_callchain_entry *get_callchain_entry(int *rctx);

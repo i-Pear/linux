@@ -6759,6 +6759,8 @@ struct perf_guest_info_callbacks __rcu *perf_guest_cbs;
 
 DEFINE_STATIC_CALL_RET0(__perf_guest_state, *perf_guest_cbs->state);
 DEFINE_STATIC_CALL_RET0(__perf_guest_get_ip, *perf_guest_cbs->get_ip);
+DEFINE_STATIC_CALL_RET0(__perf_guest_get_frame_pointer, *perf_guest_cbs->get_frame_pointer);
+DEFINE_STATIC_CALL_RET0(__perf_guest_read_virt, *perf_guest_cbs->read_virt);
 DEFINE_STATIC_CALL_RET0(__perf_guest_handle_intel_pt_intr, *perf_guest_cbs->handle_intel_pt_intr);
 
 void perf_register_guest_info_callbacks(struct perf_guest_info_callbacks *cbs)
@@ -6769,6 +6771,12 @@ void perf_register_guest_info_callbacks(struct perf_guest_info_callbacks *cbs)
 	rcu_assign_pointer(perf_guest_cbs, cbs);
 	static_call_update(__perf_guest_state, cbs->state);
 	static_call_update(__perf_guest_get_ip, cbs->get_ip);
+
+	if (cbs->get_frame_pointer)
+		static_call_update(__perf_guest_get_frame_pointer, cbs->get_frame_pointer);
+
+	if (cbs->read_virt)
+		static_call_update(__perf_guest_read_virt, cbs->read_virt);
 
 	/* Implementing ->handle_intel_pt_intr is optional. */
 	if (cbs->handle_intel_pt_intr)
@@ -6785,6 +6793,8 @@ void perf_unregister_guest_info_callbacks(struct perf_guest_info_callbacks *cbs)
 	rcu_assign_pointer(perf_guest_cbs, NULL);
 	static_call_update(__perf_guest_state, (void *)&__static_call_return0);
 	static_call_update(__perf_guest_get_ip, (void *)&__static_call_return0);
+	static_call_update(__perf_guest_get_frame_pointer, (void *)&__static_call_return0);
+	static_call_update(__perf_guest_read_virt, (void *)&__static_call_return0);
 	static_call_update(__perf_guest_handle_intel_pt_intr,
 			   (void *)&__static_call_return0);
 	synchronize_rcu();
@@ -7549,6 +7559,8 @@ perf_callchain(struct perf_event *event, struct pt_regs *regs)
 {
 	bool kernel = !event->attr.exclude_callchain_kernel;
 	bool user   = !event->attr.exclude_callchain_user;
+	bool host   = !event->attr.exclude_host;
+	bool guest  = !event->attr.exclude_guest;
 	/* Disallow cross-task user callchains. */
 	bool crosstask = event->ctx->task && event->ctx->task != current;
 	const u32 max_stack = event->attr.sample_max_stack;
@@ -7557,7 +7569,10 @@ perf_callchain(struct perf_event *event, struct pt_regs *regs)
 	if (!kernel && !user)
 		return &__empty_callchain;
 
-	callchain = get_perf_callchain(regs, 0, kernel, user,
+	if (!host && !guest)
+		return &__empty_callchain;
+
+	callchain = get_perf_callchain(regs, 0, kernel, user, host, guest,
 				       max_stack, crosstask, true);
 	return callchain ?: &__empty_callchain;
 }
