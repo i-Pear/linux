@@ -1401,9 +1401,9 @@ static int build_body(struct jit_ctx *ctx, bool extra_pass)
 		if (ctx->image == NULL)
 			ctx->offset[i] = ctx->idx;
 		ret = build_insn(insn, ctx, extra_pass);
-		ret = build_insn(insn, ctx, extra_pass);
+		// ret = build_insn(insn, ctx, extra_pass);
 		if (ret > 0) {
-			i+=2;
+			i+=1;
 			if (ctx->image == NULL)
 				ctx->offset[i] = ctx->idx;
 			continue;
