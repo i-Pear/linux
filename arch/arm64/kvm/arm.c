@@ -574,6 +574,18 @@ unsigned long kvm_arch_vcpu_get_ip(struct kvm_vcpu *vcpu)
 {
 	return *vcpu_pc(vcpu);
 }
+
+bool kvm_arch_vcpu_get_unwind_info(struct kvm_vcpu *vcpu, struct perf_kvm_guest_unwind_info *info)
+{
+	/* TODO: implement */
+	return false;
+}
+
+bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, gva_t addr, void *dest, unsigned int length)
+{
+	/* TODO: implement */
+	return false;
+}
 #endif
 
 static int kvm_vcpu_initialized(struct kvm_vcpu *vcpu)
