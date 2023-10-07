@@ -2758,11 +2758,6 @@ perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *re
 	struct unwind_state state;
 	unsigned long addr;
 
-	if (perf_guest_state()) {
-		/* TODO: We don't support guest os callchain now */
-		return;
-	}
-
 	if (perf_callchain_store(entry, regs->ip))
 		return;
 
@@ -2775,6 +2770,59 @@ perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *re
 		addr = unwind_get_return_address(&state);
 		if (!addr || perf_callchain_store(entry, addr))
 			return;
+	}
+}
+
+static inline void
+perf_callchain_guest32(struct perf_callchain_entry_ctx *entry,
+		       const struct perf_kvm_guest_unwind_info *unwind_info)
+{
+	unsigned long ss_base, cs_base;
+	struct stack_frame_ia32 frame;
+	const struct stack_frame_ia32 *fp;
+
+	cs_base = unwind_info->segment_cs_base;
+	ss_base = unwind_info->segment_ss_base;
+
+	fp = (void *)(ss_base + unwind_info->frame_pointer);
+	while (fp && entry->nr < entry->max_stack) {
+		if (!perf_guest_read_virt((unsigned long)&fp->next_frame,
+					  &frame.next_frame, sizeof(frame.next_frame)))
+			break;
+		if (!perf_guest_read_virt((unsigned long)&fp->return_address,
+					  &frame.return_address, sizeof(frame.return_address)))
+			break;
+		perf_callchain_store(entry, cs_base + frame.return_address);
+		fp = (void *)(ss_base + frame.next_frame);
+	}
+}
+
+void
+perf_callchain_guest(struct perf_callchain_entry_ctx *entry)
+{
+	struct stack_frame frame;
+	const struct stack_frame *fp;
+	struct perf_kvm_guest_unwind_info unwind_info;
+
+	if (!perf_guest_get_unwind_info(&unwind_info))
+		return;
+
+	perf_callchain_store(entry, unwind_info.ip_pointer);
+
+	if (unwind_info.is_guest_64bit) {
+		fp = (void *)unwind_info.frame_pointer;
+		while (fp && entry->nr < entry->max_stack) {
+			if (!perf_guest_read_virt((unsigned long)&fp->next_frame,
+				&frame.next_frame, sizeof(frame.next_frame)))
+				break;
+			if (!perf_guest_read_virt((unsigned long)&fp->return_address,
+				&frame.return_address, sizeof(frame.return_address)))
+				break;
+			perf_callchain_store(entry, frame.return_address);
+			fp = (void *)frame.next_frame;
+		}
+	} else {
+		perf_callchain_guest32(entry, &unwind_info);
 	}
 }
 
@@ -2860,11 +2908,6 @@ perf_callchain_user(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs
 {
 	struct stack_frame frame;
 	const struct stack_frame __user *fp;
-
-	if (perf_guest_state()) {
-		/* TODO: We don't support guest os callchain now */
-		return;
-	}
 
 	/*
 	 * We don't know what to do with VM86 stacks.. ignore them for now.
