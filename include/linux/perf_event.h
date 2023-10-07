@@ -17,6 +17,8 @@
 #include <uapi/linux/perf_event.h>
 #include <uapi/linux/bpf_perf_event.h>
 
+#include <linux/perf_kvm.h>
+
 /*
  * Kernel-internal data types and definitions:
  */
@@ -32,6 +34,9 @@
 struct perf_guest_info_callbacks {
 	unsigned int			(*state)(void);
 	unsigned long			(*get_ip)(void);
+	bool				(*get_unwind_info)(struct perf_kvm_guest_unwind_info *info);
+	bool				(*read_virt)(unsigned long addr, void *dest,
+						     unsigned int len);
 	unsigned int			(*handle_intel_pt_intr)(void);
 };
 
@@ -1500,6 +1505,8 @@ extern struct perf_guest_info_callbacks __rcu *perf_guest_cbs;
 
 DECLARE_STATIC_CALL(__perf_guest_state, *perf_guest_cbs->state);
 DECLARE_STATIC_CALL(__perf_guest_get_ip, *perf_guest_cbs->get_ip);
+DECLARE_STATIC_CALL(__perf_guest_get_unwind_info, *perf_guest_cbs->get_unwind_info);
+DECLARE_STATIC_CALL(__perf_guest_read_virt, *perf_guest_cbs->read_virt);
 DECLARE_STATIC_CALL(__perf_guest_handle_intel_pt_intr, *perf_guest_cbs->handle_intel_pt_intr);
 
 static inline unsigned int perf_guest_state(void)
@@ -1510,6 +1517,14 @@ static inline unsigned long perf_guest_get_ip(void)
 {
 	return static_call(__perf_guest_get_ip)();
 }
+static inline bool perf_guest_get_unwind_info(struct perf_kvm_guest_unwind_info *info)
+{
+	return static_call(__perf_guest_get_unwind_info)(info);
+}
+static inline bool perf_guest_read_virt(unsigned long addr, void *dest, unsigned int length)
+{
+	return static_call(__perf_guest_read_virt)(addr, dest, length);
+}
 static inline unsigned int perf_guest_handle_intel_pt_intr(void)
 {
 	return static_call(__perf_guest_handle_intel_pt_intr)();
@@ -1519,6 +1534,8 @@ extern void perf_unregister_guest_info_callbacks(struct perf_guest_info_callback
 #else
 static inline unsigned int perf_guest_state(void)		 { return 0; }
 static inline unsigned long perf_guest_get_ip(void)		 { return 0; }
+static inline bool perf_guest_get_unwind_info(struct perf_kvm_guest_unwind_info *) { return 0; }
+static inline bool perf_guest_read_virt(unsigned long, void*, unsigned int)	   { return 0; }
 static inline unsigned int perf_guest_handle_intel_pt_intr(void) { return 0; }
 #endif /* CONFIG_GUEST_PERF_EVENTS */
 
