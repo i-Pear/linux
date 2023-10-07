@@ -41,6 +41,7 @@
 #include <linux/kvm_para.h>
 
 #include <linux/kvm_types.h>
+#include <linux/perf_kvm.h>
 
 #include <asm/kvm_host.h>
 #include <linux/kvm_dirty_ring.h>
@@ -1595,6 +1596,10 @@ static inline bool kvm_arch_intc_initialized(struct kvm *kvm)
 
 #ifdef CONFIG_GUEST_PERF_EVENTS
 unsigned long kvm_arch_vcpu_get_ip(struct kvm_vcpu *vcpu);
+bool kvm_arch_vcpu_get_unwind_info(struct kvm_vcpu *vcpu,
+				   struct perf_kvm_guest_unwind_info *info);
+bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, gva_t addr, void *dest,
+			     unsigned int length);
 
 void kvm_register_perf_callbacks(unsigned int (*pt_intr_handler)(void));
 void kvm_unregister_perf_callbacks(void);
