@@ -1,0 +1,76 @@
+From cd86d4b0e60ec8b9bc2dc5619bb09ef1a5a27d4e Mon Sep 17 00:00:00 2001
+From: Tianyi Liu <i.pear@outlook.com>
+Date: Sat, 7 Oct 2023 14:49:38 +0800
+Subject: [PATCH v2 5/5] perf tools: Support PERF_CONTEXT_GUEST_* flags
+
+The `perf` util currently has a incomplete implementation for the
+following event flags, that events with these flags will be dropped or
+be identified as unknown types:
+
+`PERF_CONTEXT_GUEST_KERNEL`
+`PERF_CONTEXT_GUEST_USER`
+
+This patch makes `perf script`, `perf timechart` and `perf data`
+to correctly identify these flags.
+
+Signed-off-by: Tianyi Liu <i.pear@outlook.com>
+---
+ tools/perf/builtin-timechart.c      | 6 ++++++
+ tools/perf/util/data-convert-json.c | 6 ++++++
+ tools/perf/util/machine.c           | 6 ++++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/tools/perf/builtin-timechart.c b/tools/perf/builtin-timechart.c
+index 19d4542ea18a..6a368b6a323e 100644
+--- a/tools/perf/builtin-timechart.c
++++ b/tools/perf/builtin-timechart.c
+@@ -536,6 +536,12 @@ static const char *cat_backtrace(union perf_event *event,
+ 			case PERF_CONTEXT_USER:
+ 				cpumode = PERF_RECORD_MISC_USER;
+ 				break;
++			case PERF_CONTEXT_GUEST_KERNEL:
++				cpumode = PERF_RECORD_MISC_GUEST_KERNEL;
++				break;
++			case PERF_CONTEXT_GUEST_USER:
++				cpumode = PERF_RECORD_MISC_GUEST_USER;
++				break;
+ 			default:
+ 				pr_debug("invalid callchain context: "
+ 					 "%"PRId64"\n", (s64) ip);
+diff --git a/tools/perf/util/data-convert-json.c b/tools/perf/util/data-convert-json.c
+index 5bb3c2ba95ca..62686f78d973 100644
+--- a/tools/perf/util/data-convert-json.c
++++ b/tools/perf/util/data-convert-json.c
+@@ -205,6 +205,12 @@ static int process_sample_event(struct perf_tool *tool,
+ 				case PERF_CONTEXT_USER:
+ 					cpumode = PERF_RECORD_MISC_USER;
+ 					break;
++				case PERF_CONTEXT_GUEST_KERNEL:
++					cpumode = PERF_RECORD_MISC_GUEST_KERNEL;
++					break;
++				case PERF_CONTEXT_GUEST_USER:
++					cpumode = PERF_RECORD_MISC_GUEST_USER;
++					break;
+ 				default:
+ 					pr_debug("invalid callchain context: %"
+ 							PRId64 "\n", (s64) ip);
+diff --git a/tools/perf/util/machine.c b/tools/perf/util/machine.c
+index 88f31b3a63ac..d88458c3bfda 100644
+--- a/tools/perf/util/machine.c
++++ b/tools/perf/util/machine.c
+@@ -2346,6 +2346,12 @@ static int add_callchain_ip(struct thread *thread,
+ 			case PERF_CONTEXT_USER:
+ 				*cpumode = PERF_RECORD_MISC_USER;
+ 				break;
++			case PERF_CONTEXT_GUEST_KERNEL:
++				*cpumode = PERF_RECORD_MISC_GUEST_KERNEL;
++				break;
++			case PERF_CONTEXT_GUEST_USER:
++				*cpumode = PERF_RECORD_MISC_GUEST_USER;
++				break;
+ 			default:
+ 				pr_debug("invalid callchain context: "
+ 					 "%"PRId64"\n", (s64) ip);
+-- 
+2.34.1
+

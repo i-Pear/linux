@@ -1,0 +1,101 @@
+From cb04e87517800488bb7d5fa33f184e02704451f8 Mon Sep 17 00:00:00 2001
+From: Tianyi Liu <i.pear@outlook.com>
+Date: Sat, 7 Oct 2023 14:44:13 +0800
+Subject: [PATCH v2 1/5] KVM: Add arch specific interfaces for sampling guest callchains
+
+This patch adds three architecture specific interfaces used by `perf kvm`:
+
+- kvm_arch_vcpu_get_frame_pointer: Return the frame pointer of vcpu,
+  for x86 it's RBP, and for arm64 it's x29.
+
+- kvm_arch_vcpu_read_virt: Read data from a virtual address
+  of the given guest vm.
+
+- kvm_arch_vcpu_is_64bit: Return whether the vcpu is working in 64-bit
+  mode. It's used for determining the size of a stack frame.
+
+Since arm64 hasn't provided some foundational infrastructure,
+stub the arm64 implementation for now because it's a bit complex.
+
+Signed-off-by: Tianyi Liu <i.pear@outlook.com>
+---
+ arch/arm64/kvm/arm.c     | 17 +++++++++++++++++
+ arch/x86/kvm/x86.c       | 18 ++++++++++++++++++
+ include/linux/kvm_host.h |  4 ++++
+ 3 files changed, 39 insertions(+)
+
+diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
+index 4866b3f7b4ea..b57b88c58257 100644
+--- a/arch/arm64/kvm/arm.c
++++ b/arch/arm64/kvm/arm.c
+@@ -571,6 +571,23 @@ unsigned long kvm_arch_vcpu_get_ip(struct kvm_vcpu *vcpu)
+ {
+ 	return *vcpu_pc(vcpu);
+ }
++
++unsigned long kvm_arch_vcpu_get_frame_pointer(struct kvm_vcpu *vcpu)
++{
++	/* TODO: implement */
++	return NULL;
++}
++
++bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, void *addr, void *dest, unsigned int length)
++{
++	/* TODO: implement */
++	return false;
++}
++
++bool kvm_arch_vcpu_is_64bit(struct kvm_vcpu *vcpu)
++{
++	return !vcpu_mode_is_32bit(vcpu);
++}
+ #endif
+ 
+ static int kvm_vcpu_initialized(struct kvm_vcpu *vcpu)
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 9f18b06bbda6..17dea02b7ac9 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -12904,6 +12904,24 @@ unsigned long kvm_arch_vcpu_get_ip(struct kvm_vcpu *vcpu)
+ 	return kvm_rip_read(vcpu);
+ }
+ 
++unsigned long kvm_arch_vcpu_get_frame_pointer(struct kvm_vcpu *vcpu)
++{
++	return kvm_register_read_raw(vcpu, VCPU_REGS_RBP);
++}
++
++bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, void *addr, void *dest, unsigned int length)
++{
++	struct x86_exception e;
++
++	/* Return true on success */
++	return kvm_read_guest_virt(vcpu, addr, dest, length, &e) == X86EMUL_CONTINUE;
++}
++
++bool kvm_arch_vcpu_is_64bit(struct kvm_vcpu *vcpu)
++{
++	return is_64_bit_mode(vcpu);
++}
++
+ int kvm_arch_vcpu_should_kick(struct kvm_vcpu *vcpu)
+ {
+ 	return kvm_vcpu_exiting_guest_mode(vcpu) == IN_GUEST_MODE;
+diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
+index fb6c6109fdca..f92f1a9c8275 100644
+--- a/include/linux/kvm_host.h
++++ b/include/linux/kvm_host.h
+@@ -1595,6 +1595,10 @@ static inline bool kvm_arch_intc_initialized(struct kvm *kvm)
+ 
+ #ifdef CONFIG_GUEST_PERF_EVENTS
+ unsigned long kvm_arch_vcpu_get_ip(struct kvm_vcpu *vcpu);
++unsigned long kvm_arch_vcpu_get_frame_pointer(struct kvm_vcpu *vcpu);
++bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, void *addr, void *dest,
++			     unsigned int length);
++bool kvm_arch_vcpu_is_64bit(struct kvm_vcpu *vcpu);
+ 
+ void kvm_register_perf_callbacks(unsigned int (*pt_intr_handler)(void));
+ void kvm_unregister_perf_callbacks(void);
+-- 
+2.34.1
+

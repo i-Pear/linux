@@ -1,0 +1,111 @@
+From 55889aa3cdc12ea01b66a756ecb20e18ca627ffd Mon Sep 17 00:00:00 2001
+From: Tianyi Liu <i.pear@outlook.com>
+Date: Sat, 7 Oct 2023 14:49:15 +0800
+Subject: [PATCH v2 2/5] perf kvm: Introduce guest interfaces for sampling callchains
+
+This patch introduces two callback interfaces used between perf and KVM:
+
+- get_frame_pointer: Return the frame pointer of the running vm.
+
+- read_virt: Read data from a virtual address of the running vm,
+  used for reading the stack frames from the guest.
+
+This also introduces a new flag, `PERF_GUEST_64BIT`, to the `.state`
+callback interface, which indicates whether the vm is running in
+64-bit mode.
+
+Signed-off-by: Tianyi Liu <i.pear@outlook.com>
+---
+ include/linux/perf_event.h | 15 +++++++++++++++
+ kernel/events/core.c       | 10 ++++++++++
+ 2 files changed, 25 insertions(+)
+
+diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
+index e85cd1c0eaf3..d0f937a62b30 100644
+--- a/include/linux/perf_event.h
++++ b/include/linux/perf_event.h
+@@ -28,10 +28,13 @@
+ 
+ #define PERF_GUEST_ACTIVE	0x01
+ #define PERF_GUEST_USER	0x02
++#define PERF_GUEST_64BIT 0x04
+ 
+ struct perf_guest_info_callbacks {
+ 	unsigned int			(*state)(void);
+ 	unsigned long			(*get_ip)(void);
++	unsigned long			(*get_frame_pointer)(void);
++	bool				(*read_virt)(void *addr, void *dest, unsigned int len);
+ 	unsigned int			(*handle_intel_pt_intr)(void);
+ };
+ 
+@@ -1495,6 +1498,8 @@ extern struct perf_guest_info_callbacks __rcu *perf_guest_cbs;
+ 
+ DECLARE_STATIC_CALL(__perf_guest_state, *perf_guest_cbs->state);
+ DECLARE_STATIC_CALL(__perf_guest_get_ip, *perf_guest_cbs->get_ip);
++DECLARE_STATIC_CALL(__perf_guest_get_frame_pointer, *perf_guest_cbs->get_frame_pointer);
++DECLARE_STATIC_CALL(__perf_guest_read_virt, *perf_guest_cbs->read_virt);
+ DECLARE_STATIC_CALL(__perf_guest_handle_intel_pt_intr, *perf_guest_cbs->handle_intel_pt_intr);
+ 
+ static inline unsigned int perf_guest_state(void)
+@@ -1505,6 +1510,14 @@ static inline unsigned long perf_guest_get_ip(void)
+ {
+ 	return static_call(__perf_guest_get_ip)();
+ }
++static inline unsigned long perf_guest_get_frame_pointer(void)
++{
++	return static_call(__perf_guest_get_frame_pointer)();
++}
++static inline bool perf_guest_read_virt(void *addr, void *dest, unsigned int length)
++{
++	return static_call(__perf_guest_read_virt)(addr, dest, length);
++}
+ static inline unsigned int perf_guest_handle_intel_pt_intr(void)
+ {
+ 	return static_call(__perf_guest_handle_intel_pt_intr)();
+@@ -1514,6 +1527,8 @@ extern void perf_unregister_guest_info_callbacks(struct perf_guest_info_callback
+ #else
+ static inline unsigned int perf_guest_state(void)		 { return 0; }
+ static inline unsigned long perf_guest_get_ip(void)		 { return 0; }
++static inline unsigned long perf_guest_get_frame_pointer(void)	{ return 0; }
++static inline bool perf_guest_read_virt(void*, void*, unsigned int)	{ return 0; }
+ static inline unsigned int perf_guest_handle_intel_pt_intr(void) { return 0; }
+ #endif /* CONFIG_GUEST_PERF_EVENTS */
+ 
+diff --git a/kernel/events/core.c b/kernel/events/core.c
+index 4c72a41f11af..eaba00ec2b34 100644
+--- a/kernel/events/core.c
++++ b/kernel/events/core.c
+@@ -6759,6 +6759,8 @@ struct perf_guest_info_callbacks __rcu *perf_guest_cbs;
+ 
+ DEFINE_STATIC_CALL_RET0(__perf_guest_state, *perf_guest_cbs->state);
+ DEFINE_STATIC_CALL_RET0(__perf_guest_get_ip, *perf_guest_cbs->get_ip);
++DEFINE_STATIC_CALL_RET0(__perf_guest_get_frame_pointer, *perf_guest_cbs->get_frame_pointer);
++DEFINE_STATIC_CALL_RET0(__perf_guest_read_virt, *perf_guest_cbs->read_virt);
+ DEFINE_STATIC_CALL_RET0(__perf_guest_handle_intel_pt_intr, *perf_guest_cbs->handle_intel_pt_intr);
+ 
+ void perf_register_guest_info_callbacks(struct perf_guest_info_callbacks *cbs)
+@@ -6770,6 +6772,12 @@ void perf_register_guest_info_callbacks(struct perf_guest_info_callbacks *cbs)
+ 	static_call_update(__perf_guest_state, cbs->state);
+ 	static_call_update(__perf_guest_get_ip, cbs->get_ip);
+ 
++	if (cbs->get_frame_pointer)
++		static_call_update(__perf_guest_get_frame_pointer, cbs->get_frame_pointer);
++
++	if (cbs->read_virt)
++		static_call_update(__perf_guest_read_virt, cbs->read_virt);
++
+ 	/* Implementing ->handle_intel_pt_intr is optional. */
+ 	if (cbs->handle_intel_pt_intr)
+ 		static_call_update(__perf_guest_handle_intel_pt_intr,
+@@ -6785,6 +6793,8 @@ void perf_unregister_guest_info_callbacks(struct perf_guest_info_callbacks *cbs)
+ 	rcu_assign_pointer(perf_guest_cbs, NULL);
+ 	static_call_update(__perf_guest_state, (void *)&__static_call_return0);
+ 	static_call_update(__perf_guest_get_ip, (void *)&__static_call_return0);
++	static_call_update(__perf_guest_get_frame_pointer, (void *)&__static_call_return0);
++	static_call_update(__perf_guest_read_virt, (void *)&__static_call_return0);
+ 	static_call_update(__perf_guest_handle_intel_pt_intr,
+ 			   (void *)&__static_call_return0);
+ 	synchronize_rcu();
+-- 
+2.34.1
+

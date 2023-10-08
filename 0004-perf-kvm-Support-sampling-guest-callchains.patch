@@ -1,0 +1,234 @@
+From 1315c7dbe620e6c6db1d58e76e8658fbec6f4f1c Mon Sep 17 00:00:00 2001
+From: Tianyi Liu <i.pear@outlook.com>
+Date: Sat, 7 Oct 2023 14:53:15 +0800
+Subject: [PATCH v2 4/5] perf kvm: Support sampling guest callchains
+
+This patch provides support for sampling guests' callchains.
+
+The signature of `get_perf_callchain` has been modified to explicitly
+specify whether it needs to sample the host or guest callchain.
+Based on the context, it will distribute the sampling request to one of
+`perf_callchain_user`, `perf_callchain_kernel`, or `perf_callchain_guest`.
+
+The reason for separately implementing `perf_callchain_user` and
+`perf_callchain_kernel` is that the kernel may utilize special unwinders
+such as `ORC`. However, for the guest, we only support stackframe-based
+unwinding, so the implementation is generic and only needs to be
+separately implemented for 32-bit and 64-bit.
+
+Signed-off-by: Tianyi Liu <i.pear@outlook.com>
+---
+ arch/x86/events/core.c     | 56 +++++++++++++++++++++++++++++++-------
+ include/linux/perf_event.h |  3 +-
+ kernel/bpf/stackmap.c      |  8 +++---
+ kernel/events/callchain.c  | 27 +++++++++++++++++-
+ kernel/events/core.c       |  7 ++++-
+ 5 files changed, 84 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/events/core.c b/arch/x86/events/core.c
+index 185f902e5f28..ea4c86175ec0 100644
+--- a/arch/x86/events/core.c
++++ b/arch/x86/events/core.c
+@@ -2758,11 +2758,6 @@ perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *re
+ 	struct unwind_state state;
+ 	unsigned long addr;
+ 
+-	if (perf_guest_state()) {
+-		/* TODO: We don't support guest os callchain now */
+-		return;
+-	}
+-
+ 	if (perf_callchain_store(entry, regs->ip))
+ 		return;
+ 
+@@ -2778,6 +2773,52 @@ perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *re
+ 	}
+ }
+ 
++static inline void
++perf_callchain_guest32(struct perf_callchain_entry_ctx *entry)
++{
++	struct stack_frame_ia32 frame;
++	const struct stack_frame_ia32 *fp;
++
++	fp = (void *)perf_guest_get_frame_pointer();
++	while (fp && entry->nr < entry->max_stack) {
++		if (!perf_guest_read_virt(&fp->next_frame, &frame.next_frame,
++			sizeof(frame.next_frame)))
++			break;
++		if (!perf_guest_read_virt(&fp->return_address, &frame.return_address,
++			sizeof(frame.return_address)))
++			break;
++		perf_callchain_store(entry, frame.return_address);
++		fp = (void *)frame.next_frame;
++	}
++}
++
++void
++perf_callchain_guest(struct perf_callchain_entry_ctx *entry)
++{
++	struct stack_frame frame;
++	const struct stack_frame *fp;
++	unsigned int guest_state;
++
++	guest_state = perf_guest_state();
++	perf_callchain_store(entry, perf_guest_get_ip());
++
++	if (guest_state & PERF_GUEST_64BIT) {
++		fp = (void *)perf_guest_get_frame_pointer();
++		while (fp && entry->nr < entry->max_stack) {
++			if (!perf_guest_read_virt(&fp->next_frame, &frame.next_frame,
++				sizeof(frame.next_frame)))
++				break;
++			if (!perf_guest_read_virt(&fp->return_address, &frame.return_address,
++				sizeof(frame.return_address)))
++				break;
++			perf_callchain_store(entry, frame.return_address);
++			fp = (void *)frame.next_frame;
++		}
++	} else {
++		perf_callchain_guest32(entry);
++	}
++}
++
+ static inline int
+ valid_user_frame(const void __user *fp, unsigned long size)
+ {
+@@ -2861,11 +2902,6 @@ perf_callchain_user(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs
+ 	struct stack_frame frame;
+ 	const struct stack_frame __user *fp;
+ 
+-	if (perf_guest_state()) {
+-		/* TODO: We don't support guest os callchain now */
+-		return;
+-	}
+-
+ 	/*
+ 	 * We don't know what to do with VM86 stacks.. ignore them for now.
+ 	 */
+diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
+index d0f937a62b30..a2baf4856128 100644
+--- a/include/linux/perf_event.h
++++ b/include/linux/perf_event.h
+@@ -1545,9 +1545,10 @@ DECLARE_PER_CPU(struct perf_callchain_entry, perf_callchain_entry);
+ 
+ extern void perf_callchain_user(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs);
+ extern void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs);
++extern void perf_callchain_guest(struct perf_callchain_entry_ctx *entry);
+ extern struct perf_callchain_entry *
+ get_perf_callchain(struct pt_regs *regs, u32 init_nr, bool kernel, bool user,
+-		   u32 max_stack, bool crosstask, bool add_mark);
++		   bool host, bool guest, u32 max_stack, bool crosstask, bool add_mark);
+ extern int get_callchain_buffers(int max_stack);
+ extern void put_callchain_buffers(void);
+ extern struct perf_callchain_entry *get_callchain_entry(int *rctx);
+diff --git a/kernel/bpf/stackmap.c b/kernel/bpf/stackmap.c
+index 458bb80b14d5..2e88d4639e27 100644
+--- a/kernel/bpf/stackmap.c
++++ b/kernel/bpf/stackmap.c
+@@ -294,8 +294,8 @@ BPF_CALL_3(bpf_get_stackid, struct pt_regs *, regs, struct bpf_map *, map,
+ 	if (max_depth > sysctl_perf_event_max_stack)
+ 		max_depth = sysctl_perf_event_max_stack;
+ 
+-	trace = get_perf_callchain(regs, 0, kernel, user, max_depth,
+-				   false, false);
++	trace = get_perf_callchain(regs, 0, kernel, user, true, false,
++				   max_depth, false, false);
+ 
+ 	if (unlikely(!trace))
+ 		/* couldn't fetch the stack trace */
+@@ -420,8 +420,8 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
+ 	else if (kernel && task)
+ 		trace = get_callchain_entry_for_task(task, max_depth);
+ 	else
+-		trace = get_perf_callchain(regs, 0, kernel, user, max_depth,
+-					   false, false);
++		trace = get_perf_callchain(regs, 0, kernel, user, true, false,
++					   max_depth, false, false);
+ 	if (unlikely(!trace))
+ 		goto err_fault;
+ 
+diff --git a/kernel/events/callchain.c b/kernel/events/callchain.c
+index 1273be84392c..7e80729e95d0 100644
+--- a/kernel/events/callchain.c
++++ b/kernel/events/callchain.c
+@@ -45,6 +45,10 @@ __weak void perf_callchain_user(struct perf_callchain_entry_ctx *entry,
+ {
+ }
+ 
++__weak void perf_callchain_guest(struct perf_callchain_entry_ctx *entry)
++{
++}
++
+ static void release_callchain_buffers_rcu(struct rcu_head *head)
+ {
+ 	struct callchain_cpus_entries *entries;
+@@ -178,11 +182,12 @@ put_callchain_entry(int rctx)
+ 
+ struct perf_callchain_entry *
+ get_perf_callchain(struct pt_regs *regs, u32 init_nr, bool kernel, bool user,
+-		   u32 max_stack, bool crosstask, bool add_mark)
++		   bool host, bool guest, u32 max_stack, bool crosstask, bool add_mark)
+ {
+ 	struct perf_callchain_entry *entry;
+ 	struct perf_callchain_entry_ctx ctx;
+ 	int rctx;
++	unsigned int guest_state;
+ 
+ 	entry = get_callchain_entry(&rctx);
+ 	if (!entry)
+@@ -194,6 +199,26 @@ get_perf_callchain(struct pt_regs *regs, u32 init_nr, bool kernel, bool user,
+ 	ctx.contexts       = 0;
+ 	ctx.contexts_maxed = false;
+ 
++	guest_state = perf_guest_state();
++	if (guest_state) {
++		if (!guest)
++			goto exit_put;
++		if (user && (guest_state & PERF_GUEST_USER)) {
++			if (add_mark)
++				perf_callchain_store_context(&ctx, PERF_CONTEXT_GUEST_USER);
++			perf_callchain_guest(&ctx);
++		}
++		if (kernel && !(guest_state & PERF_GUEST_USER)) {
++			if (add_mark)
++				perf_callchain_store_context(&ctx, PERF_CONTEXT_GUEST_KERNEL);
++			perf_callchain_guest(&ctx);
++		}
++		goto exit_put;
++	}
++
++	if (unlikely(!host))
++		goto exit_put;
++
+ 	if (kernel && !user_mode(regs)) {
+ 		if (add_mark)
+ 			perf_callchain_store_context(&ctx, PERF_CONTEXT_KERNEL);
+diff --git a/kernel/events/core.c b/kernel/events/core.c
+index eaba00ec2b34..b3401f403637 100644
+--- a/kernel/events/core.c
++++ b/kernel/events/core.c
+@@ -7559,6 +7559,8 @@ perf_callchain(struct perf_event *event, struct pt_regs *regs)
+ {
+ 	bool kernel = !event->attr.exclude_callchain_kernel;
+ 	bool user   = !event->attr.exclude_callchain_user;
++	bool host   = !event->attr.exclude_host;
++	bool guest  = !event->attr.exclude_guest;
+ 	/* Disallow cross-task user callchains. */
+ 	bool crosstask = event->ctx->task && event->ctx->task != current;
+ 	const u32 max_stack = event->attr.sample_max_stack;
+@@ -7567,7 +7569,10 @@ perf_callchain(struct perf_event *event, struct pt_regs *regs)
+ 	if (!kernel && !user)
+ 		return &__empty_callchain;
+ 
+-	callchain = get_perf_callchain(regs, 0, kernel, user,
++	if (!host && !guest)
++		return &__empty_callchain;
++
++	callchain = get_perf_callchain(regs, 0, kernel, user, host, guest,
+ 				       max_stack, crosstask, true);
+ 	return callchain ?: &__empty_callchain;
+ }
+-- 
+2.34.1
+

@@ -1,0 +1,70 @@
+From cd86d4b0e60ec8b9bc2dc5619bb09ef1a5a27d4e Mon Sep 17 00:00:00 2001
+From: Tianyi Liu <i.pear@outlook.com>
+Date: Sun, 8 Oct 2023 15:12:10 +0800
+Subject: [PATCH v2 0/5] perf: KVM: Enable callchains for guests
+
+This series of patches enables callchains for guests (used by perf kvm),
+which holds the top spot on the perf wiki TODO list [1]. This allows users
+to perform guest OS callchain or performance analysis from external
+using PMU events.
+
+The event processing flow is as follows (shown as backtrace):
+@0 kvm_arch_vcpu_get_frame_pointer / kvm_arch_vcpu_read_virt (per arch)
+@1 kvm_guest_get_frame_pointer / kvm_guest_read_virt
+   <callback function pointers in `struct perf_guest_info_callbacks`>
+@2 perf_guest_get_frame_pointer / perf_guest_read_virt
+@3 perf_callchain_guest
+@4 get_perf_callchain
+@5 perf_callchain
+
+Between @0 and @1 is the interface between KVM and the arch-specific
+impl, while between @1 and @2 is the interface between Perf and KVM.
+The 1st patch implements @0. The 2nd patch extends interfaces between @1
+and @2, while the 3rd patch implements @1. The 4th patch implements @3
+and modifies @4 @5. The last patch is for userspace tools.
+
+Since arm64 hasn't provided some foundational infrastructure (interface
+for reading from a virtual address of guest), the arm64 implementation
+is stubbed for now because it's a bit complex, and will be implemented
+later.
+
+Tested with both 32-bit and 64-bit guest operating systems / unikernels,
+that `perf script` could correctly show the certain callchains.
+FlameGraphs can also be generated with this series of patches and [2].
+
+[1] https://perf.wiki.kernel.org/index.php/Todo
+[2] https://github.com/brendangregg/FlameGraph
+
+v1:
+https://lore.kernel.org/kvm/SYYP282MB108686A73C0F896D90D246569DE5A@SYYP282MB1086.AUSP282.PROD.OUTLOOK.COM/
+
+Changes since v1:
+- v1 only includes partial KVM modifications, while v2 is a complete
+implementation. Also updated some code based on Sean's feedback.
+
+Tianyi Liu (5):
+  KVM: Add arch specific interfaces for sampling guest callchains
+  perf kvm: Introduce guest interfaces for sampling callchains
+  KVM: implement new perf interfaces
+  perf kvm: Support sampling guest callchains
+  perf tools: Support PERF_CONTEXT_GUEST_* flags
+
+ arch/arm64/kvm/arm.c                | 17 +++++++++
+ arch/x86/events/core.c              | 56 +++++++++++++++++++++++------
+ arch/x86/kvm/x86.c                  | 18 ++++++++++
+ include/linux/kvm_host.h            |  4 +++
+ include/linux/perf_event.h          | 18 +++++++++-
+ kernel/bpf/stackmap.c               |  8 ++---
+ kernel/events/callchain.c           | 27 +++++++++++++-
+ kernel/events/core.c                | 17 ++++++++-
+ tools/perf/builtin-timechart.c      |  6 ++++
+ tools/perf/util/data-convert-json.c |  6 ++++
+ tools/perf/util/machine.c           |  6 ++++
+ virt/kvm/kvm_main.c                 | 25 +++++++++++++
+ 12 files changed, 191 insertions(+), 17 deletions(-)
+
+
+base-commit: 8a749fd1a8720d4619c91c8b6e7528c0a355c0aa
+-- 
+2.34.1
+
