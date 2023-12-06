@@ -2773,49 +2773,64 @@ perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *re
 	}
 }
 
+#ifdef CONFIG_IA32_EMULATION
+
+#include <linux/compat.h>
+
 static inline void
-perf_callchain_guest32(struct perf_callchain_entry_ctx *entry)
+perf_callchain_guest32(struct perf_callchain_entry_ctx *entry, struct perf_kvm_guest_unwind_info* unwind_info)
 {
+	unsigned long ss_base, cs_base;
 	struct stack_frame_ia32 frame;
 	const struct stack_frame_ia32 *fp;
 
-	fp = (void *)perf_guest_get_frame_pointer();
+	cs_base = unwind_info->segment_cs_base;
+	ss_base = unwind_info->segment_ss_base;
+
+	fp = (void *)(ss_base + unwind_info->frame_pointer);
 	while (fp && entry->nr < entry->max_stack) {
-		if (!perf_guest_read_virt(&fp->next_frame, &frame.next_frame,
-			sizeof(frame.next_frame)))
+		if (!perf_guest_read_virt((unsigned long)&fp->next_frame,
+			&frame.next_frame, sizeof(frame.next_frame)))
 			break;
-		if (!perf_guest_read_virt(&fp->return_address, &frame.return_address,
-			sizeof(frame.return_address)))
+		if (!perf_guest_read_virt((unsigned long)&fp->return_address,
+			&frame.return_address, sizeof(frame.return_address)))
 			break;
-		perf_callchain_store(entry, frame.return_address);
-		fp = (void *)frame.next_frame;
+		perf_callchain_store(entry, cs_base + frame.return_address);
+		fp = (void *)(ss_base + frame.next_frame);
 	}
 }
+#else
+static inline void
+perf_callchain_guest32(struct perf_callchain_entry_ctx *entry, struct perf_kvm_guest_unwind_info* unwind_info)
+{
+    return 0;
+}
+#endif
 
 void
 perf_callchain_guest(struct perf_callchain_entry_ctx *entry)
 {
 	struct stack_frame frame;
 	const struct stack_frame *fp;
-	unsigned int guest_state;
+	struct perf_kvm_guest_unwind_info unwind_info;
 
-	guest_state = perf_guest_state();
-	perf_callchain_store(entry, perf_guest_get_ip());
+	perf_guest_get_unwind_info(&unwind_info);
+	perf_callchain_store(entry, unwind_info.ip_pointer);
 
-	if (guest_state & PERF_GUEST_64BIT) {
-		fp = (void *)perf_guest_get_frame_pointer();
+	if (unwind_info.is_64bit) {
+		fp = (void *)unwind_info.frame_pointer;
 		while (fp && entry->nr < entry->max_stack) {
-			if (!perf_guest_read_virt(&fp->next_frame, &frame.next_frame,
-				sizeof(frame.next_frame)))
+			if (!perf_guest_read_virt((unsigned long)&fp->next_frame,
+				&frame.next_frame, sizeof(frame.next_frame)))
 				break;
-			if (!perf_guest_read_virt(&fp->return_address, &frame.return_address,
-				sizeof(frame.return_address)))
+			if (!perf_guest_read_virt((unsigned long)&fp->return_address,
+				&frame.return_address, sizeof(frame.return_address)))
 				break;
 			perf_callchain_store(entry, frame.return_address);
 			fp = (void *)frame.next_frame;
 		}
 	} else {
-		perf_callchain_guest32(entry);
+		perf_callchain_guest32(entry, &unwind_info);
 	}
 }
 

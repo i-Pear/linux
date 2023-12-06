@@ -575,21 +575,16 @@ unsigned long kvm_arch_vcpu_get_ip(struct kvm_vcpu *vcpu)
 	return *vcpu_pc(vcpu);
 }
 
-unsigned long kvm_arch_vcpu_get_frame_pointer(struct kvm_vcpu *vcpu)
-{
-	/* TODO: implement */
-	return NULL;
-}
-
-bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, void *addr, void *dest, unsigned int length)
+bool kvm_arch_vcpu_get_unwind_info(struct kvm_vcpu *vcpu, struct perf_kvm_guest_unwind_info *info)
 {
 	/* TODO: implement */
 	return false;
 }
 
-bool kvm_arch_vcpu_is_64bit(struct kvm_vcpu *vcpu)
+bool kvm_arch_vcpu_read_virt(struct kvm_vcpu *vcpu, gva_t addr, void *dest, unsigned int length)
 {
-	return !vcpu_mode_is_32bit(vcpu);
+	/* TODO: implement */
+	return false;
 }
 #endif
 
